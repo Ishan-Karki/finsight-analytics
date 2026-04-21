@@ -1,5 +1,6 @@
 import streamlit as st
 import plotly.express as px
+import plotly.graph_objects as go
 import pandas as pd
 
 def _calculate_running_balance(df: pd.DataFrame) -> pd.Series:
@@ -59,16 +60,59 @@ def render_dashboard(df, category_totals, daily_trend):
             daily_net.columns = ['Date', 'Net_Flow']
             daily_net['Cumulative_Balance'] = daily_net['Net_Flow'].cumsum()
             
-            fig_line = px.line(
-                daily_net, 
-                x='Date', 
-                y='Cumulative_Balance',
-                markers=True,
-                line_shape='hv' # Step chart looks better for balance
+            # Determine overall trend for color
+            is_up = True
+            if len(daily_net) > 0:
+                is_up = daily_net['Cumulative_Balance'].iloc[-1] >= daily_net['Cumulative_Balance'].iloc[0]
+            
+            line_color = '#39FF14' if is_up else '#FF073A'
+            fill_color = 'rgba(57, 255, 20, 0.2)' if is_up else 'rgba(255, 7, 58, 0.2)'
+            
+            fig_line = go.Figure()
+            
+            fig_line.add_trace(go.Scatter(
+                x=daily_net['Date'], 
+                y=daily_net['Cumulative_Balance'],
+                mode='lines+markers',
+                fill='tozeroy',
+                fillcolor=fill_color,
+                line=dict(color=line_color, shape='spline', smoothing=0.8),
+                marker=dict(size=5, color=line_color),
+                name='Balance'
+            ))
+            
+            avg_val = daily_net['Cumulative_Balance'].mean() if len(daily_net) > 0 else 0
+            fig_line.add_hline(
+                y=avg_val, 
+                line_dash="dash", 
+                line_color="rgba(255, 255, 255, 0.5)", 
+                annotation_text=f"Average: Rs. {avg_val:,.2f}", 
+                annotation_position="top right"
             )
+            
             fig_line.update_layout(
                 yaxis_title="Balance (Rs.)",
-                margin=dict(t=0, b=0, l=0, r=0)
+                xaxis_title="Date",
+                margin=dict(t=20, b=0, l=0, r=0),
+                hovermode="x unified",
+                xaxis=dict(
+                    showspikes=True,
+                    spikemode="across",
+                    spikesnap="cursor",
+                    spikedash="solid",
+                    spikecolor="gray",
+                    spikethickness=1,
+                    showline=True
+                ),
+                yaxis=dict(
+                    showspikes=True,
+                    spikemode="across",
+                    spikesnap="cursor",
+                    spikedash="solid",
+                    spikecolor="gray",
+                    spikethickness=1,
+                    showline=True
+                )
             )
             st.plotly_chart(fig_line, use_container_width=True)
             

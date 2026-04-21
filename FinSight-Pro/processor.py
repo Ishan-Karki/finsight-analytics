@@ -55,7 +55,7 @@ def process_with_ai(uploaded_file):
     Handles CSV, TXT, PDF, and images.
     """
     if not api_key:
-        st.error("GEMINI_API_KEY is missing from the .env file. Please add your Gemini API Key to continue.")
+        st.error("GEMINI_API_KEY is missing from the .env file. Please add your Gemini API Ke"y to continue.")
         return None, None, None
 
     try:
