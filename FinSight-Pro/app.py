@@ -1,4 +1,8 @@
 import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+from sklearn.linear_model import LinearRegression
 import processor
 
 # Configure the page setting to Wide Mode
@@ -61,9 +65,27 @@ else:
         total_spent = category_totals['Amount'].sum()
         total_transactions = len(df)
         
-        m1, m2 = st.columns(2)
+        # --- ML: Predicted Next Month Spend ---
+        df_ml = df.copy()
+        df_ml['Month_Period'] = df_ml['Date'].dt.to_period('M')
+        monthly_spend = df_ml.groupby('Month_Period')['Amount'].sum().reset_index()
+        monthly_spend['Month_Num'] = np.arange(len(monthly_spend))
+
+        if len(monthly_spend) >= 2:
+            model = LinearRegression()
+            X = monthly_spend[['Month_Num']]
+            y = monthly_spend['Amount']
+            model.fit(X, y)
+            next_month_idx = len(monthly_spend)
+            X_pred = pd.DataFrame({'Month_Num': [next_month_idx]})
+            predicted_spend = model.predict(X_pred)[0]
+        else:
+            predicted_spend = monthly_spend['Amount'].mean() if not monthly_spend.empty else 0
+        
+        m1, m2, m3 = st.columns(3)
         m1.metric("Total Tracked Volume", f"${total_spent:,.2f}")
         m2.metric("Total Transactions", f"{total_transactions}")
+        m3.metric("Predicted Next Month Spend", f"${max(0, predicted_spend):,.2f}")
         
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown("### 📈 Insights")
@@ -71,12 +93,16 @@ else:
         col1, col2 = st.columns(2)
         
         with col1:
-            st.write("**Total by Category**")
-            st.dataframe(category_totals, use_container_width=True, hide_index=True)
+            st.write("**Expenses by Category**")
+            fig_donut = px.pie(category_totals, values='Amount', names='Category', hole=0.4)
+            fig_donut.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig_donut, use_container_width=True)
             
         with col2:
-            st.write("**Daily Spending Trend**")
-            st.line_chart(daily_trend, x="Date", y="Amount")
+            st.write("**Cumulative Spending Trend**")
+            daily_trend['Cumulative_Amount'] = daily_trend['Amount'].cumsum()
+            fig_line = px.line(daily_trend, x='Date', y='Cumulative_Amount')
+            st.plotly_chart(fig_line, use_container_width=True)
             
         st.markdown("### 🔍 Transaction Log")
         st.dataframe(df, use_container_width=True)
