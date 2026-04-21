@@ -3,7 +3,6 @@ import streamlit as st
 import numpy as np
 import os
 import json
-import base64
 from dotenv import load_dotenv
 import google.generativeai as genai
 
@@ -55,7 +54,7 @@ def process_with_ai(uploaded_file):
     Handles CSV, TXT, PDF, and images.
     """
     if not api_key:
-        st.error("GEMINI_API_KEY is missing from the .env file. Please add your Gemini API Ke"y to continue.")
+        st.error("GEMINI_API_KEY is missing from the .env file. Please add your Gemini API Key to continue.")
         return None, None, None
 
     try:
@@ -137,9 +136,6 @@ def process_with_ai(uploaded_file):
         st.error(f"Error during AI processing: {str(e)}")
         return None, None, None
 
-# Fallback for old calls if needed
-def process_bank_data(uploaded_file):
-    return process_with_ai(uploaded_file)
 
 def chat_with_data(user_query, history_df):
     """
