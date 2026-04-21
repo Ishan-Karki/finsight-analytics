@@ -1,4 +1,5 @@
 import streamlit as st
+import processor
 
 # Configure the page setting to Wide Mode
 st.set_page_config(
@@ -49,7 +50,36 @@ if uploaded_file is None:
 else:
     # This block will run once the user uploads a CSV
     st.success(f"Successfully uploaded `{uploaded_file.name}`! Preparing analysis dashboard...")
-    st.write("*(Analysis modules will be implemented here)*")
+    
+    df, category_totals, daily_trend = processor.process_bank_data(uploaded_file)
+    
+    if df is not None:
+        st.markdown("---")
+        st.header("📊 Financial Overview")
+        
+        # Display Top Level Metrics
+        total_spent = category_totals['Amount'].sum()
+        total_transactions = len(df)
+        
+        m1, m2 = st.columns(2)
+        m1.metric("Total Tracked Volume", f"${total_spent:,.2f}")
+        m2.metric("Total Transactions", f"{total_transactions}")
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("### 📈 Insights")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write("**Total by Category**")
+            st.dataframe(category_totals, use_container_width=True, hide_index=True)
+            
+        with col2:
+            st.write("**Daily Spending Trend**")
+            st.line_chart(daily_trend, x="Date", y="Amount")
+            
+        st.markdown("### 🔍 Transaction Log")
+        st.dataframe(df, use_container_width=True)
 
 # ----------------- FOOTER -----------------
 # Inject custom CSS to construct a fixed footer with the privacy disclaimer
