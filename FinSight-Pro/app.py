@@ -1,11 +1,12 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
-from sklearn.linear_model import LinearRegression
 import processor
+from ui.sidebar import render_sidebar
+from ui.dashboard import render_dashboard
+from ui.chatbot import render_chatbot
 
-# Configure the page setting to Wide Mode
+# Configure the page setting
 st.set_page_config(
     page_title="FinSight-Pro",
     page_icon="📊",
@@ -13,130 +14,53 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Initialize Session State for transactions (In-memory only)
+if "session_transactions" not in st.session_state:
+    st.session_state.session_transactions = pd.DataFrame()
+
 # ----------------- SIDEBAR -----------------
-with st.sidebar:
-    st.header("📂 Data Upload")
-    st.write("Upload your bank statement to start analyzing.")
-    # Accept only .csv files
-    uploaded_file = st.file_uploader("Choose a CSV file", type=["csv"])
-    
-    st.markdown("---")
-    st.markdown(
-        """
-        ### About FinSight-Pro
-        FinSight-Pro provides advanced analytics and insights into your personal finances securely.
-        """
-    )
+uploaded_file = render_sidebar()
 
 # ----------------- MAIN CONTENT -----------------
-if uploaded_file is None:
-    # High-quality Welcome Dashboard
-    st.title("Welcome to FinSight-Pro 📊")
-    st.markdown("### Please upload a bank CSV to begin your local-only analysis.")
-    
-    st.markdown("<br>", unsafe_allow_html=True)
-    
-    # Placeholder metrics layout for high-quality feel
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric(label="Total Balance", value="Rs. --.--")
-    with col2:
-        st.metric(label="Income", value="Rs. --.--")
-    with col3:
-        st.metric(label="Expenses", value="Rs. --.--")
-    with col4:
-        st.metric(label="Savings Rate", value="-- %")
-        
-    st.markdown("---")
-    
-    st.info("✨ **Tip:** Your data is processed entirely in your browser/local machine. We do not store or transmit any of your financial data.", icon="ℹ️")
+tab1, tab2 = st.tabs(["📊 Current Analysis", "🤖 AI Assistant"])
 
-else:
-    # This block will run once the user uploads a CSV
-    st.success(f"Successfully uploaded `{uploaded_file.name}`! Preparing analysis dashboard...")
-    
-    df, category_totals, daily_trend = processor.process_bank_data(uploaded_file)
-    
-    if df is not None:
-        st.markdown("---")
-        st.header("📊 Financial Overview (NPR)")
+with tab1:
+    if uploaded_file is not None:
+        st.success(f"Processing `{uploaded_file.name}`...")
+        with st.spinner('Analyzing with Gemini AI...'):
+            df, category_totals, daily_trend = processor.process_with_ai(uploaded_file)
         
-        # Display Top Level Metrics
-        total_spent = category_totals['Amount'].sum()
-        total_transactions = len(df)
-        
-        # --- ML: Predicted Next Month Spend ---
-        df_ml = df.copy()
-        df_ml['Month_Period'] = df_ml['Date'].dt.to_period('M')
-        monthly_spend = df_ml.groupby('Month_Period')['Amount'].sum().reset_index()
-        monthly_spend['Month_Num'] = np.arange(len(monthly_spend))
+        if df is not None:
+            # Append to session state for the chatbot to know about it
+            st.session_state.session_transactions = pd.concat([st.session_state.session_transactions, df]).drop_duplicates().reset_index(drop=True)
+            st.success("Analysis complete! Chatbot is now aware of these transactions.")
+            render_dashboard(df, category_totals, daily_trend)
+    else:
+        render_dashboard(None, None, None)
 
-        if len(monthly_spend) >= 2:
-            model = LinearRegression()
-            X = monthly_spend[['Month_Num']]
-            y = monthly_spend['Amount']
-            model.fit(X, y)
-            next_month_idx = len(monthly_spend)
-            X_pred = pd.DataFrame({'Month_Num': [next_month_idx]})
-            predicted_spend = model.predict(X_pred)[0]
-        else:
-            predicted_spend = monthly_spend['Amount'].mean() if not monthly_spend.empty else 0
-        
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Total Tracked Volume", f"Rs. {total_spent:,.2f}")
-        m2.metric("Total Transactions", f"{total_transactions}")
-        m3.metric("Predicted Next Month Spend", f"Rs. {max(0, predicted_spend):,.2f}")
-        
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("### 📈 Insights")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write("**Expenses by Category**")
-            fig_donut = px.pie(category_totals, values='Amount', names='Category', hole=0.4)
-            fig_donut.update_traces(
-                textposition='inside', 
-                textinfo='percent+label',
-                hovertemplate="%{label}<br>Amount: Rs. %{value:,.2f}<extra></extra>"
-            )
-            st.plotly_chart(fig_donut, use_container_width=True)
-            
-        with col2:
-            st.write("**Cumulative Spending Trend**")
-            daily_trend['Cumulative_Amount'] = daily_trend['Amount'].cumsum()
-            fig_line = px.line(daily_trend, x='Date', y='Cumulative_Amount')
-            fig_line.update_traces(hovertemplate="Date: %{x}<br>Cumulative Amount: Rs. %{y:,.2f}<extra></extra>")
-            fig_line.update_layout(yaxis_title="Amount (Rs.)")
-            st.plotly_chart(fig_line, use_container_width=True)
-            
-        st.markdown("### 🔍 Transaction Log")
-        st.dataframe(df, use_container_width=True)
+with tab2:
+    render_chatbot()
 
 # ----------------- FOOTER -----------------
-# Inject custom CSS to construct a fixed footer with the privacy disclaimer
 footer_css = """
 <style>
-.footer {
-    position: fixed;
-    left: 0;
-    bottom: 0;
-    width: 100%;
-    background-color: transparent;
-    color: #a0a0a0;
-    text-align: center;
-    padding: 10px;
-    font-size: 0.9rem;
-    border-top: 1px solid #333;
-    z-index: 100;
+.footer { 
+    position: fixed; 
+    left: 0; 
+    bottom: 0; 
+    width: 100%; 
+    background-color: transparent; 
+    color: #a0a0a0; 
+    text-align: center; 
+    padding: 10px; 
+    font-size: 0.8rem; 
+    border-top: 1px solid #333; 
+    z-index: 100; 
 }
-/* Ensure the main content doesn't get hidden behind the footer */
-.block-container {
-    padding-bottom: 60px;
-}
+.block-container { padding-bottom: 80px; }
 </style>
 <div class="footer">
-    🔒 <strong>Privacy Disclaimer:</strong> Data remains on your local machine. No external databases are used.
+    🔒 <strong>Privacy First:</strong> Data is stored in-memory and cleared after the session ends. Analysis powered by Gemini AI.
 </div>
 """
 st.markdown(footer_css, unsafe_allow_html=True)

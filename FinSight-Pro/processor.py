@@ -1,120 +1,180 @@
 import pandas as pd
 import streamlit as st
+import numpy as np
+import os
+import json
+import base64
+from dotenv import load_dotenv
+import google.generativeai as genai
 
-def process_bank_data(uploaded_file):
+load_dotenv()
+
+# Configure Gemini
+api_key = os.getenv("GEMINI_API_KEY")
+if api_key:
+    genai.configure(api_key=api_key)
+
+def _extract_json_array(response_text: str):
     """
-    Loads uploaded CSV into a DataFrame, performs fuzzy column matching, 
-    converts dates, and calculates category & daily groupings.
-    
-    Returns:
-        tuple: (cleaned_dataframe, category_grouped_dataframe, daily_trend_dataframe)
+    Safely extract the first valid JSON array from model output.
+    Handles markdown wrappers and trailing non-JSON text.
     """
-    # 1. Load CSV with auto header detection
+    cleaned = response_text.strip()
+
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:]
+    if cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+    cleaned = cleaned.strip()
+
+    decoder = json.JSONDecoder()
+
+    # Try direct parse first.
     try:
-        sample_df = pd.read_csv(uploaded_file, header=None, nrows=30)
-        
-        expected_mapping = {
-            'Date': ['date', 'time', 'posting', 'txn', 'transaction date'],
-            'Description': ['description', 'desc', 'memo', 'payee', 'details', 'particulars', 'name', 'transaction'],
-            'Amount': ['amount', 'cost', 'value', 'price', 'spending', 'withdrawal', 'deposit', 'debit', 'credit'],
-            'Category': ['category', 'type', 'group', 'classification']
-        }
+        parsed, _ = decoder.raw_decode(cleaned)
+        if isinstance(parsed, list):
+            return parsed
+    except json.JSONDecodeError:
+        pass
 
-        best_row_idx = 0
-        max_matches = 0
-        
-        for i, row in sample_df.iterrows():
-            row_str = [str(v).lower() for v in row.values if pd.notna(v) and str(v).strip() != '']
-            matches = 0
-            for expected_col, aliases in expected_mapping.items():
-                if any(any(alias in cell for cell in row_str) for alias in aliases):
-                    matches += 1
-            if matches > max_matches:
-                max_matches = matches
-                best_row_idx = i
-                
-        # Reload the file with the identified header row
-        uploaded_file.seek(0)
-        df = pd.read_csv(uploaded_file, header=best_row_idx)
-        
-    except Exception as e:
-        st.error(f"Failed to read the file. Error: {e}")
+    # Fallback: locate first '[' and decode from there.
+    start = cleaned.find('[')
+    if start == -1:
+        raise ValueError("No JSON array found in AI response.")
+
+    parsed, _ = decoder.raw_decode(cleaned[start:])
+    if not isinstance(parsed, list):
+        raise ValueError("AI response did not contain a valid JSON array.")
+    return parsed
+
+def process_with_ai(uploaded_file):
+    """
+    Sends the uploaded file to Gemini to extract financial transactions into a structured JSON format.
+    Handles CSV, TXT, PDF, and images.
+    """
+    if not api_key:
+        st.error("GEMINI_API_KEY is missing from the .env file. Please add your Gemini API Key to continue.")
         return None, None, None
 
-    # 2. Extract specific columns safely
-    extracted_data = {}
-    missing_cols = []
-    
-    # We pick exactly one column for each expected column to avoid duplicate axis issues
-    for expected_col, aliases in expected_mapping.items():
-        matched_col = None
+    try:
+        # Prepare the file for Gemini
+        file_bytes = uploaded_file.getvalue()
+        file_name = uploaded_file.name.lower()
         
-        # Priority 1: Exact match
-        for col in df.columns:
-            if str(col).strip().lower() == expected_col.lower():
-                matched_col = col
-                break
-                
-        # Priority 2: Substring / Alias match
-        if not matched_col:
-            for col in df.columns:
-                cl = str(col).strip().lower()
-                if any(alias in cl for alias in aliases):
-                    matched_col = col
-                    break
-                    
-        if matched_col:
-            # If CSV had exact identical column headers, df[matched_col] returns a DataFrame. Take first one.
-            col_data = df[matched_col]
-            if isinstance(col_data, pd.DataFrame):
-                col_data = col_data.iloc[:, 0]
-            extracted_data[expected_col] = col_data
+        # Determine mime type
+        if file_name.endswith('.pdf'):
+            mime_type = 'application/pdf'
+        elif file_name.endswith('.csv'):
+            mime_type = 'text/csv'
+        elif file_name.endswith('.txt'):
+            mime_type = 'text/plain'
+        elif file_name.endswith('.jpg') or file_name.endswith('.jpeg'):
+            mime_type = 'image/jpeg'
+        elif file_name.endswith('.png'):
+            mime_type = 'image/png'
         else:
-            missing_cols.append(expected_col)
+            mime_type = 'text/plain'
 
-    required_missing = [c for c in ['Date', 'Amount', 'Description'] if c in missing_cols]
-    if required_missing:
-        st.error(f"Could not find required columns loosely matching: {', '.join(required_missing)}.")
-        return None, None, None
+        model = genai.GenerativeModel('gemini-3-flash-preview')
+        
+        prompt = """
+        You are an expert financial data extractor. I am providing you with a file (could be an image of a receipt, a PDF statement, or a messy CSV/TXT file).
+        Please extract all financial transactions and return ONLY a valid JSON array of objects. 
+        Each object MUST have these exact keys:
+        - "Date": The transaction date in YYYY-MM-DD format.
+        - "Description": A brief string describing the payee or transaction.
+        - "Amount": The monetary amount as a positive number (float). Ignore currency symbols.
+        - "Category": Categorize exactly as 'Deposit' (if money is coming in/credit) or 'Withdraw' (if money is going out/debit).
+        - "Balance": Closing/running balance visible after this transaction in the statement. Use a number if available, otherwise null.
+        
+        Do NOT write markdown code blocks like ```json ... ```. Just return the raw JSON array starting with '[' and ending with ']'.
+        """
+        
+        contents = [
+            {"mime_type": mime_type, "data": file_bytes},
+            prompt
+        ]
+        
+        response = model.generate_content(contents)
+        response_text = response.text.strip()
 
-    # Replace df with ONLY our clean target columns
-    df = pd.DataFrame(extracted_data)
-    
-    # 2.5 Auto-Categorize if 'Category' is missing
-    if 'Category' not in df.columns:
-        def auto_categorize(desc):
-            desc = str(desc).lower()
-            if any(w in desc for w in ['uber', 'lyft', 'taxi', 'transit', 'mta', 'gas', 'shell', 'chevron', 'exxon', 'mobil', 'airlines']): return 'Transport'
-            if any(w in desc for w in ['restaurant', 'cafe', 'coffee', 'doordash', 'uber eats', 'starbucks', 'mcdonald', 'burger', 'pizza', 'grubhub']): return 'Dining'
-            if any(w in desc for w in ['walmart', 'target', 'amazon', 'grocery', 'whole foods', 'safeway', 'kroger', 'trader joe', 'costco']): return 'Groceries & Shopping'
-            if any(w in desc for w in ['netflix', 'spotify', 'hulu', 'apple', 'gym', 'planet fitness', 'disney', 'hbo']): return 'Entertainment & Subscriptions'
-            if any(w in desc for w in ['pharmacy', 'cvs', 'walgreens', 'health', 'doctor', 'hospital', 'medical']): return 'Healthcare'
-            if any(w in desc for w in ['payment', 'transfer', 'zelle', 'venmo', 'paypal', 'credit card', 'atm', 'deposit', 'withdrawal']): return 'Transfer & Payment'
-            return 'Other'
-        df['Category'] = df['Description'].apply(auto_categorize)
-
-    # 3. Proper Datetime Conversion
-    try:
+        json_data = _extract_json_array(response_text)
+        
+        if not json_data or not isinstance(json_data, list):
+            st.error("No transactions found or incorrect format returned by AI.")
+            return None, None, None
+            
+        df = pd.DataFrame(json_data)
+        
+        # Ensure correct column types
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         df = df.dropna(subset=['Date'])
-    except Exception as e:
-        st.error("Failed to parse 'Date' column format.")
-        return None, None, None
         
-    # Standardize numeric values
-    if df['Amount'].dtype == 'object':
-        df['Amount'] = df['Amount'].astype(str).str.replace(r'[\$,]|Rs\.?|NPR', '', regex=True)
-    df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce')
-    
-    df['Description'] = df['Description'].fillna("Unknown")
-    df['Category'] = df['Category'].fillna("Uncategorized")
-    
-    # 4. Group data by Category and Date
-    category_totals = df.groupby('Category', as_index=False)['Amount'].sum().sort_values(by='Amount')
-    
-    # Group by date for daily trend
-    daily_trend = df.groupby(df['Date'].dt.date)['Amount'].sum().reset_index()
-    daily_trend.rename(columns={'index': 'Date' if 'index' in daily_trend.columns else 'Date'}, inplace=True)
-    daily_trend = daily_trend.sort_values(by='Date')
-    
-    return df, category_totals, daily_trend
+        df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0.0)
+        df['Description'] = df['Description'].fillna("Unknown")
+        df['Category'] = df['Category'].fillna("Uncategorized")
+        if 'Balance' in df.columns:
+            df['Balance'] = pd.to_numeric(df['Balance'], errors='coerce')
+        else:
+            df['Balance'] = np.nan
+        
+        # Calculate summaries
+        category_totals = df.groupby('Category', as_index=False)['Amount'].sum().sort_values(by='Amount')
+        
+        daily_trend = df.groupby(df['Date'].dt.date)['Amount'].sum().reset_index()
+        daily_trend.rename(columns={'index': 'Date'}, inplace=True)
+        # Rename date back if needed
+        if 'Date' not in daily_trend.columns and len(daily_trend.columns) > 0:
+            daily_trend.columns = ['Date', 'Amount']
+            
+        daily_trend = daily_trend.sort_values(by='Date')
+        
+        return df, category_totals, daily_trend
+
+    except Exception as e:
+        st.error(f"Error during AI processing: {str(e)}")
+        return None, None, None
+
+# Fallback for old calls if needed
+def process_bank_data(uploaded_file):
+    return process_with_ai(uploaded_file)
+
+def chat_with_data(user_query, history_df):
+    """
+    Uses Gemini to answer questions about the transaction history.
+    """
+    if not api_key:
+        return "I'm sorry, but it looks like the Gemini API Key is missing. Please contact support."
+
+    try:
+        # Prepare a summary of the data to keep it within context limits if needed, 
+        # but for typical personal history, the whole CSV is usually fine for Gemini 1.5 Flash.
+        # We'll convert the DF to a compact CSV-like string for the prompt.
+        data_context = history_df.to_csv(index=False)
+        
+        model = genai.GenerativeModel('gemini-3-flash-preview')
+        
+        system_prompt = f"""
+        You are 'FinSight AI', a specialized personal finance assistant for the SpendWise-Analytics / FinSight-Pro app.
+        You have access to the user's transaction history provided below in CSV format.
+        
+        USER DATA:
+        {data_context}
+        
+        GUIDELINES:
+        1. Answer questions based ONLY on the provided data.
+        2. Be concise but helpful. Use NPR (Rs.) for currency.
+        3. Transactions are categorized as 'Deposit' or 'Withdraw'.
+        4. If you're asked for summaries, give them.
+        5. If you don't find the answer, politely say you don't have that data.
+        6. Format your response with markdown for better readability (bolding, lists, etc.).
+        7. Today's date is {pd.Timestamp.now().strftime('%Y-%m-%d')}.
+        """
+        
+        response = model.generate_content([system_prompt, user_query])
+        return response.text.strip()
+    except Exception as e:
+        return f"Error communicating with AI: {str(e)}"
+
