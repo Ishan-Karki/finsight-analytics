@@ -39,11 +39,11 @@ if uploaded_file is None:
     # Placeholder metrics layout for high-quality feel
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric(label="Total Balance", value="$ --.--")
+        st.metric(label="Total Balance", value="Rs. --.--")
     with col2:
-        st.metric(label="Income", value="$ --.--")
+        st.metric(label="Income", value="Rs. --.--")
     with col3:
-        st.metric(label="Expenses", value="$ --.--")
+        st.metric(label="Expenses", value="Rs. --.--")
     with col4:
         st.metric(label="Savings Rate", value="-- %")
         
@@ -59,7 +59,7 @@ else:
     
     if df is not None:
         st.markdown("---")
-        st.header("📊 Financial Overview")
+        st.header("📊 Financial Overview (NPR)")
         
         # Display Top Level Metrics
         total_spent = category_totals['Amount'].sum()
@@ -83,9 +83,9 @@ else:
             predicted_spend = monthly_spend['Amount'].mean() if not monthly_spend.empty else 0
         
         m1, m2, m3 = st.columns(3)
-        m1.metric("Total Tracked Volume", f"${total_spent:,.2f}")
+        m1.metric("Total Tracked Volume", f"Rs. {total_spent:,.2f}")
         m2.metric("Total Transactions", f"{total_transactions}")
-        m3.metric("Predicted Next Month Spend", f"${max(0, predicted_spend):,.2f}")
+        m3.metric("Predicted Next Month Spend", f"Rs. {max(0, predicted_spend):,.2f}")
         
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown("### 📈 Insights")
@@ -95,13 +95,19 @@ else:
         with col1:
             st.write("**Expenses by Category**")
             fig_donut = px.pie(category_totals, values='Amount', names='Category', hole=0.4)
-            fig_donut.update_traces(textposition='inside', textinfo='percent+label')
+            fig_donut.update_traces(
+                textposition='inside', 
+                textinfo='percent+label',
+                hovertemplate="%{label}<br>Amount: Rs. %{value:,.2f}<extra></extra>"
+            )
             st.plotly_chart(fig_donut, use_container_width=True)
             
         with col2:
             st.write("**Cumulative Spending Trend**")
             daily_trend['Cumulative_Amount'] = daily_trend['Amount'].cumsum()
             fig_line = px.line(daily_trend, x='Date', y='Cumulative_Amount')
+            fig_line.update_traces(hovertemplate="Date: %{x}<br>Cumulative Amount: Rs. %{y:,.2f}<extra></extra>")
+            fig_line.update_layout(yaxis_title="Amount (Rs.)")
             st.plotly_chart(fig_line, use_container_width=True)
             
         st.markdown("### 🔍 Transaction Log")
